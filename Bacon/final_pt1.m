@@ -1,6 +1,7 @@
 %% full nonlinear sim
 % constants
 mu = 398600;
+mu = 3.986004418e5;
 Re = 6378;
 we = 2*pi/86400;
 
@@ -66,11 +67,18 @@ end
 %% linearization
 
 % CT jacobians
-A = @(x) [0, 1, 0, 0; ...
-         -mu/r(x)^3*(1+3*x(1)^2/r(x)^2), 0, 3*mu*x(1)*x(3)/r(x)^5, 0;...
-          0, 0, 1, 0;...
-          3*mu*x(1)*x(3)/r(x)^5, 0, -mu/r(x)^3*(1+3*x(3)^2/r(x)^2), 0];
+A = @(x) [0,                             1,                              0, 0; ...
+         -mu/r(x)^3*(1-3*x(1)^2/r(x)^2), 0,          3*mu*x(1)*x(3)/r(x)^5, 0;...
+          0,                             0,                              0, 1;...
+          3*mu*x(1)*x(3)/r(x)^5,         0, -mu/r(x)^3*(1-3*x(3)^2/r(x)^2), 0];
 B = [0 0;1 0;0 0;0 1];
+
+H = @(t,x,i) [(x(1)-xi(t,i))/p(t,x,i), 0, (x(3)-yi(t,i))/p(t,x,i), 0;...
+              (x(2)-xi_dot(t,i))/p(t,x,i) - p_dot(t,x,i)*(x(1)-xi(t,i))/p(t,x,i)^2,...
+                (x(1)-xi(t,i))/p(t,x,i),...
+                (x(4)-yi_dot(t,i))/p(t,x,i) - p_dot(t,x,i)*(x(3)-yi(t,i))/p(t,x,i)^2,...
+                (x(3)-yi(t,i))/p(t,x,i);...
+              cos(phi(t,x,i))^2*[-(x(3)-yi(t,i))/(x(1)-xi(t,i))^2, 0, 1/(x(1)-xi(t,i)), 0]];
 
 % set up nominal trajectory
 % nominal radius/mean motion/period
@@ -86,12 +94,32 @@ Alin_DT = Alin_CT;
 x_lin = zeros(4,nt);
 dx = zeros(4,nt+1);
 dx(:,1) = x_pert;
+y_lin = zeros(3,nt,ni);
+dy = zeros(3,nt,ni);
 for k = 1:nt
+    % current state of nominal trajectory
+    x_nom_k = x_nom(t(k));
+
     % reconstruct full state as nominal + delta
-    x_lin(:,k) = x_nom(t(k)) + dx(:,k);
+    x_lin(:,k) = x_nom_k + dx(:,k);
+    
+    % calculate linearized measurement
+    for i = 1:ni
+        % evaluate nominal measurement
+        y_lin(:,k,i) = [p(t(k),x_nom_k,i); p_dot(t(k),x_nom_k,i); phi(t(k),x_nom_k,i)];
+
+        % add delta measurement
+        y_lin(:,k,i) = y_lin(:,k,i) + H(t(k),x_nom_k,i)*dx(:,k);
+
+        % remove if out of sight
+        if min(mod(th(t(k),i)-phi(t(k),x_lin(:,k),i),2*pi),...
+               mod(phi(t(k),x_lin(:,k),i)-th(t(k),i),2*pi)) > pi/2
+            y_lin(:,k,i) = NaN;
+        end
+    end
 
     % evaluate CT jacobian at the nominal trajectory
-    Alin_CT(:,:,k) = A(x_nom(t(k)));
+    Alin_CT(:,:,k) = A(x_nom_k);
     
     % euler estimate of DT jacobian
     Alin_DT(:,:,k) = eye(4) + dt*Alin_CT(:,:,k);
@@ -117,6 +145,21 @@ subplot(4,1,1); plot(t,x(1,:)-x_lin(1,:));
 subplot(4,1,2); plot(t,x(2,:)-x_lin(2,:));
 subplot(4,1,3); plot(t,x(3,:)-x_lin(3,:));
 subplot(4,1,4); plot(t,x(4,:)-x_lin(4,:));
+
+% plot linearized sim state on top of the full nonlinear state
+figure(66); clf(); dx = dx(:,1:end-1);
+subplot(4,1,1); plot(t,dx(1,:));
+subplot(4,1,2); plot(t,dx(2,:));
+subplot(4,1,3); plot(t,dx(3,:));
+subplot(4,1,4); plot(t,dx(4,:));
+
+% pot linearized measurements
+figure(77); clf()
+for i = 1:ni
+    subplot(3,1,1); plot(t,y_lin(1,:,i),'o'); hold on
+    subplot(3,1,2); plot(t,y_lin(2,:,i),'o'); hold on
+    subplot(3,1,3); plot(t,y_lin(3,:,i),'o'); hold on
+end
 
 % i = 2;
 % % h: ny x nt x ni
