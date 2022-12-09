@@ -111,7 +111,7 @@ for n = 1:simsN
             tempY(2*kk-1:2*kk)  = [rE*sin(spinRateEarth*ii*deltaT + theta0(kk));spinRateEarth*rE*cos(spinRateEarth*ii*deltaT+theta0(kk))];
 
             temp_yOut{kk,1}     = [measureY(nonLinearState(ii,:),tempX(2*kk-1:2*kk),tempY(2*kk-1:2*kk))];
-            temp_yNoise{kk,1}   = measureY(trueX(ii,:),tempX(2*kk-1:2*kk),tempY(2*kk-1:2*kk))+mvnrnd(zeros(1,3),Rtrue);
+            temp_yNoise{kk,1}   = [measureY(trueX(ii,:),tempX(2*kk-1:2*kk),tempY(2*kk-1:2*kk))+mvnrnd(zeros(1,3),Rtrue)'];
         end
         temp_yOut   = [temp_yOut{:}]; % Converting Cell to Matrix
         temp_yNoise = [temp_yNoise{:}];
