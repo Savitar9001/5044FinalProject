@@ -16,6 +16,7 @@ f = @(t,x) [x(2,:);...
 dt = 10;
 times = 0:dt:14000;
 x_pert = [0;0.075;0;-0.021];
+x_pert = [0;0;0;0];
 x0 = [6678; 0; 0; sqrt(mu/6678)] + x_pert;
 
 % solve ODE
@@ -39,10 +40,14 @@ p = @(t,x,i) sqrt((x(1,:)-xi(t,i)).^2 + (x(3,:)-yi(t,i)).^2); % t: row, x: 4 x n
 p_dot = @(t,x,i) ( (x(1,:)-xi(t,i)).*(x(2,:)-xi_dot(t,i)) + (x(3,:)-yi(t,i)).*(x(4,:)-yi_dot(t,i)) )./p(t,x,i);
 % angle measurement
 phi = @(t,x,i) atan2(x(3,:)-yi(t,i), x(1,:)-xi(t,i));
+% total measurement
+h = @(t,x,i) [p(t,x,i);...
+              p_dot(t,x,i);...
+              phi(t,x,i)];
 
 % calculate measurements for all 12 ground stations
-h = zeros(3,nt,ni);
-figure(33); clf()
+nonlin_y = zeros(3,nt,ni);
+figure(33); clf(); colors = 'rgbcmkrgbcmk';
 for i = 1:ni
     % angle measurements over time
     phis = phi(t,x,i);
@@ -50,18 +55,18 @@ for i = 1:ni
     ths = th(t,i);
 
     % vector measurement over time for ground station i
-    h(:,:,i) = [p(t,x,i); p_dot(t,x,i); phis];
+    nonlin_y(:,:,i) = [p(t,x,i); p_dot(t,x,i); phis];
 
     % not in view when phi is more than 90 deg from theta
     not_in_view = min(mod(ths-phis,2*pi),mod(phis-ths,2*pi)) > pi/2;
 
     % set measurements to NaN when not in view
-    h(:,not_in_view,i) = NaN;
+    nonlin_y(:,not_in_view,i) = NaN;
 
     % plot measurements
-    subplot(3,1,1); plot(t,h(1,:,i),'o'); hold on
-    subplot(3,1,2); plot(t,h(2,:,i),'o'); hold on
-    subplot(3,1,3); plot(t,h(3,:,i),'o'); hold on
+    subplot(3,1,1); plot(t,nonlin_y(1,:,i),[colors(i) 'o']); hold on
+    subplot(3,1,2); plot(t,nonlin_y(2,:,i),[colors(i) 'o']); hold on
+    subplot(3,1,3); plot(t,nonlin_y(3,:,i),[colors(i) 'o']); hold on
 end
 
 %% linearization
@@ -127,6 +132,10 @@ for k = 1:nt
     % propagate the delta x state
     dx(:,k+1) = Alin_DT(:,:,k)*dx(:,k);
 end
+G = dt*B;
+W = G;
+I = eye(4);
+
 
 % plot linearized sim state on top of the full nonlinear state
 figure(44); clf()
@@ -155,14 +164,154 @@ subplot(4,1,4); plot(t,dx(4,:));
 
 % pot linearized measurements
 figure(77); clf()
+colors = 'rgbcmkrgbcmk';
 for i = 1:ni
-    subplot(3,1,1); plot(t,y_lin(1,:,i),'o'); hold on
-    subplot(3,1,2); plot(t,y_lin(2,:,i),'o'); hold on
-    subplot(3,1,3); plot(t,y_lin(3,:,i),'o'); hold on
+    subplot(3,1,1); plot(t,y_lin(1,:,i),[colors(i) 'o']); hold on
+    subplot(3,1,2); plot(t,y_lin(2,:,i),[colors(i) 'o']); hold on
+    subplot(3,1,3); plot(t,y_lin(3,:,i),[colors(i) 'o']); hold on
 end
 
-% i = 2;
-% % h: ny x nt x ni
-% h = @(t,x,i) [reshape(p(t,x,i)',1,nt,ni);...
-%               reshape(p_dot(t,x,i)',1,nt,ni);...
-%               reshape(phi(t,x,i)',1,nt,ni)];
+%% generate noisy measurements
+
+
+%% Linearized KF
+load('orbitdeterm_finalproj_KFdata.mat');
+
+% noise parameters
+Q = Qtrue;
+R = 10*Rtrue;
+
+x0 = [0;0;0;0];
+P0 = 300 * diag([1,1e-3,1,1e-3]);
+[xs_lkf,Ps_lkf,s_lkf,inns_lkf] = LKF(x0,P0,x_nom,h,A,H,W,Q,R,t,ydata);
+
+%% EKF
+
+x0 = x_nom(0);
+P0 = 300 * diag([1,1e-3,1,1e-3]);
+h = @(t,x,i) [p(t,x,i);...
+              p_dot(t,x,i);...
+              phi(t,x,i)];
+[xs_ekf,Ps_ekf,s_ekf,inns_ekf] = EKF(x0,P0,f,h,A,H,W,Qtrue,Rtrue,t,ydata);
+
+%% filter functions
+
+function [xs,Ps,s,inns] = LKF(x0,P0,x_nom,h,A,H,W,Q,R,t,ydata)
+% initial conditions
+dt = t(2)-t(1);
+ny = length(ydata);
+x = x0;
+P = P0;
+xs = zeros(4,ny); xs(:,1) = x;
+Ps = zeros(4,4,ny); Ps(:,:,1) = P;
+s = zeros(4,ny); s(:,1) = 2*sqrt(diag(P));
+inns = zeros(3,ny);
+I = eye(length(x0));
+for k = 2:ny
+    % get model parameters
+    x_nom_k = x_nom(t(k));
+    Fk = I + dt*A(x_nom(t(k-1)));
+    if ~isempty(ydata{k})
+        i_in_view = ydata{k}(4,:);
+        yk = reshape(ydata{k}(1:3,:),[],1);
+    else
+        i_in_view = [];
+        yk = [];
+    end
+    Hs = cell(1,length(i_in_view)); Rs = Hs;
+    y_nom_k = zeros(3*length(i_in_view),1);
+    for j = 1:length(i_in_view)
+        Hs{j} = H(t(k),x_nom_k,i_in_view(j));
+        Rs{j} = R;
+        y_nom_k((j-1)*3+(1:3)) = h(t(k),x_nom_k,i_in_view(j));
+    end
+    Hk = vertcat(Hs{:});
+    Rk = blkdiag(Rs{:});
+    
+    % predict
+    x_ = Fk*x;
+    P_ = Fk*P*Fk' + W*Q*W';
+    % correct
+    if ~isempty(i_in_view)
+        K = P_*Hk'/(Hk*P_*Hk' + Rk);
+        innovation = (yk-y_nom_k) - Hk*x_;
+        innovation(3:3:end) = mod(pi + innovation(3:3:end), 2*pi) - pi;
+        x = x_ + K*innovation;
+        P = (I-K*Hk)*P_;
+        inns(:,k) = innovation(1:min(end,3));
+    else
+        x = x_;
+        P = P_;
+    end
+    
+    % store current values
+    xs(:,k) = x;
+    Ps(:,:,k) = P;
+    s(:,k) = 2*sqrt(diag(P));
+end
+% reconstruct full state estimate 
+xs = x_nom(t) + xs;
+end
+
+
+
+function [xs,Ps,s,inns] = EKF(x0,P0,f,h,A,H,W,Q,R,t,ydata)
+opts = odeset('RelTol',1e-12,'AbsTol',1e-12);
+ny = length(ydata);
+dt = t(2)-t(1);
+x = x0;
+P = P0;
+I = eye(length(x0));
+xs = zeros(4,ny); xs(:,1) = x;
+Ps = zeros(4,4,ny); Ps(:,:,1) = P;
+s = zeros(4,ny); s(:,1) = 2*sqrt(diag(P));
+inns = zeros(3,ny);
+for k = 2:ny
+    % get F
+    Fk = I + dt*A(x);
+    
+    % prediction step
+    [~,x_] = ode45(f,[0 dt],x,opts);
+    x_ = x_(end,:)';
+    P_ = Fk*P*Fk' + W*Q*W';
+
+    % measurement processing
+    if ~isempty(ydata{k})
+        i_in_view = ydata{k}(4,:);
+        yk = reshape(ydata{k}(1:3,:),[],1);
+    else
+        i_in_view = [];
+        yk = [];
+    end
+    Hs = cell(1,length(i_in_view)); Rs = Hs;
+    yk_est = zeros(3*length(i_in_view),1);
+    for j = 1:length(i_in_view)
+        Hs{j} = H(t(k),x,i_in_view(j));
+        Rs{j} = R;
+        yk_est((j-1)*3+(1:3)) = h(t(k),x_,i_in_view(j));
+    end
+
+    % create augmented H and R matrices
+    Hk = vertcat(Hs{:});
+    Rk = blkdiag(Rs{:});
+
+    % correction step
+    if ~isempty(i_in_view)
+        K = P_*Hk'/(Hk*P_*Hk' + Rk);
+        innovation = yk - yk_est;
+        innovation(3:3:end) = mod(pi + innovation(3:3:end), 2*pi) - pi;
+        x = x_ + K*innovation;
+        P = (I-K*Hk)*P_;
+        inns(:,k) = innovation(1:min(end,3));
+    else
+        x = x_;
+        P = P_;
+    end
+
+    % store current values
+    xs(:,k) = x;
+    Ps(:,:,k) = P;
+    s(:,k) = 2*sqrt(diag(P));
+end
+end
+
