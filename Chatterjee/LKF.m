@@ -15,7 +15,7 @@ rng(100);
 
 %% Initial Parameters
 t0              = 0;
-state0              = 6678;                                 % [km] Nominal Orbit of SC
+state0          = 6678;                                 % [km] Nominal Orbit of SC
 y0              = 0;
 mu              = 398600;                               % [km^3/s^2] Earth Gravitational Parameters
 r0              = sqrt(state0^2 + y0^2);
@@ -44,14 +44,16 @@ end
 
 gamma = [0 0; 1 0; 0 0; 0 1];                       % Disturbance model
 tuneQ = diag([1e-8,1e-3,1e-8,1e-3]);               % just chose small #s for now
+%tuneQ  = diag([1,1,1,1]);
 %Q_tune = diag([10,0.1,10,0.1]);
+%tuneQ   = 0.01*[0.0071246231041958, 0.001866095612661221e-2, 0.001866095612661221e-2, 0.00779388288435167];
 %Omega_ext = deltaT*Gamma;
 
-perturb = [0.01, 0.075, 0.01, -0.021];
+dx = [0.01, 0.075, 0.01, -0.021];
 
 % Nonlinear Simulation
-state0  = [r0*cos(omega*t0), -omega*r0*sin(omega*t0), r0*sin(omega*t0), omega*r0*cos(omega*t0)] + perturb;
-P0      = diag((perturb.^2));                 % Might Need to Double Check This
+state0  = [r0*cos(omega*t0), -omega*r0*sin(omega*t0), r0*sin(omega*t0), omega*r0*cos(omega*t0)] + dx;
+P0      = diag((dx.^2));                 % Might Need to Double Check This
 P       = 2*pi*sqrt(r0^3/mu);                 % [sec] Period
 
 tol = 1e-12;
@@ -156,7 +158,8 @@ for n = 1:simsN
 
     %    kfdx = []; P = []; phatm = []; dy = []; dy_pert = []; stdev = []; innov = [];
 
-    [kfdx, P, phatm, dy, dy_pert, stdev, innov] = linearKalmanFilter(yStoreNoise, yStoreNominal, perturb, P0, storeF, gamma, tuneQ, Rtrue, H, deltaT);
+    [kfdx, P, phatm, dy, dy_pert, stdev, innov] = linearKalmanFilter(yStoreNoise, yStoreNominal, dx, P0, storeF, gamma, tuneQ, Rtrue, H, deltaT);
+    % [kfdx, P, phatm, dy, dy_pert, stdev, innov] = linearKalmanFilter(ydata', yStoreNominal, perturb, P0, storeF, gamma, tuneQ, Rtrue, H, deltaT);
 
     %% NEES and NIS Testing
 
@@ -166,9 +169,22 @@ for n = 1:simsN
     NIS         = zeros(length(tVec),1);
 
     for kk = 2:length(tVec)
-        if length(yStoreNoise{kk}) > 1 % make sure we have data
+        % if length(yStoreNoise{kk}) > 1 % make sure we have data
+        if length(ydata{kk}) > 1 &&  length(yStoreNominal{kk}) > 1% make sure we have data
 
-            errorY{kk} = (yStoreNoise{kk} - yStoreNominal{kk}) - dy_pert{kk};
+            % errorY{kk} = (yStoreNoise{kk} - yStoreNominal{kk}) - dy_pert{kk};
+            if size(yStoreNominal{kk},1) > 3 && size(ydata{kk}(1:3,:),2) > 1
+                currYData = ydata{kk}(1:3,:); currYData = currYData(:);
+            elseif size(yStoreNominal{kk},1) <= 3
+                currYData = ydata{kk}(1:3,end); currYData = currYData(:);
+            elseif size(yStoreNominal{kk},1) > 3 || size(ydata{kk}(1:3,:),2) ~= 2
+                currYData = ydata{kk}(1:3,1); currYData = currYData(:);
+                % yStoreNominal{ii} = yStoreNominal{ii}(1:3);
+                currYData = [currYData;0;0;0];
+            end
+            errorY{kk}  = currYData - yStoreNominal{kk};
+
+
 
             for z = 1:length(errorY{kk})/3 % wrap per measurement
                 tempErrorY = errorY{kk};
@@ -197,6 +213,7 @@ for n = 1:simsN
 end
 
 
+%% Implementation with ydata
 H3      = cell(1,length(tVec));
 yNom3   = cell(1,length(tVec));
 y3      = cell(1,length(tVec));
@@ -360,3 +377,166 @@ xlabel('Time [sec]')
 ylabel('Velocity Error [km/s]')
 legend('X','Y')
 
+
+% %% Let's Create Some More Organized Plots
+% xYdata      = zeros(1,length(ydata));
+% xDotYdata   = zeros(1,length(ydata));
+% yYdata      = zeros(1,length(ydata));
+% yDotYdata   = zeros(1,length(ydata));
+% for zz = 1:length(ydata)
+%     if ~isempty(ydata{:,zz})
+%         xYdata(zz)      = ydata{:,zz}(1);
+%         xDotYdata(zz)   = ydata{:,zz}(2);
+%         yYdata(zz)      = ydata{:,zz}(3);
+%         yDotYdata(zz)   = ydata{:,zz}(4);
+%     else % It's Empty
+%         xYdata(zz)      = NaN;
+%         xDotYdata(zz)   = NaN;
+%         yYdata(zz)      = NaN;
+%         yDotYdata(zz)   = NaN;
+%     end
+% end
+
+figure
+subplot(4,1,1);
+plot(tplot,trueX(:,1) - kfdx(:,1));
+hold on; grid on;
+plot(tplot,trueX(:,1) - kfdx(:,1) - stdev(1,:)');
+plot(tplot,trueX(:,1) - kfdx(:,1) + stdev(1,:)');
+xlabel('Time (seconds)'); ylabel('X [km]'); 
+legend('Trajectory','-2\sigma','2\sigma');
+title('LKF Estimated States');
+
+subplot(4,1,2);
+plot(tplot,trueX(:,2) - kfdx(:,2)); 
+hold on; grid on;
+plot(tplot,trueX(:,2) - kfdx(:,2) - stdev(2,:));
+plot(tplot,trueX(:,2) - kfdx(:,2) + stdev(2,:));
+xlabel('Time (seconds)'); ylabel('$\dot{X} [km/s]$','Interpreter','latex');
+
+subplot(4,1,3);
+plot(tplot,trueX(:,3) - kfdx(:,3)); 
+hold on; grid on;
+plot(tplot,trueX(:,3) - kfdx(:,3) - stdev(3,:));
+plot(tplot,trueX(:,3) - kfdx(:,3) + stdev(3,:));
+xlabel('Time (seconds)'); ylabel('Y [km]');
+
+subplot(4,1,4);
+plot(tplot,trueX(:,4) - kfdx(:,4)); 
+hold on; grid on;
+plot(tplot,trueX(:,4) - kfdx(:,4) - stdev(4,:));
+plot(tplot,trueX(:,4) - kfdx(:,4) + stdev(4,:));
+xlabel('Time (seconds)'); ylabel('$\dot{Y} [km/s]$','Interpreter','latex');
+
+
+
+
+
+figure
+subplot(4,1,1);
+plot(tplot,kfdx(:,1));
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('X [km]'); 
+title('LKF Estimated Error');
+
+subplot(4,1,2);
+plot(tplot,kfdx(:,2)); 
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('$\dot{X} [km/s]$','Interpreter','latex');
+
+subplot(4,1,3);
+plot(tplot,kfdx(:,3)); 
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('Y [km]');
+
+subplot(4,1,4);
+plot(tplot,kfdx(:,4)); 
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('$\dot{Y} [km/s]$','Interpreter','latex');
+
+
+
+%% Run for the Actual Provided Data
+figure
+subplot(4,1,1);
+plot(tplot,trueX(:,1) - kfdx_p3(:,1));
+hold on; grid on;
+plot(tplot,trueX(:,1) - kfdx_p3(:,1) - stdev_p3(1,:)');
+plot(tplot,trueX(:,1) - kfdx_p3(:,1) + stdev_p3(1,:)');
+xlabel('Time (seconds)'); ylabel('X [km]'); 
+legend('Trajectory','-2\sigma','2\sigma');
+title('LKF Estimated States');
+
+subplot(4,1,2);
+plot(tplot,trueX(:,2) - kfdx_p3(:,2)); 
+hold on; grid on;
+plot(tplot,trueX(:,2) - kfdx_p3(:,2) - stdev_p3(2,:)');
+plot(tplot,trueX(:,2) - kfdx_p3(:,2) + stdev_p3(2,:)');
+xlabel('Time (seconds)'); ylabel('$\dot{X} [km/s]$','Interpreter','latex');
+
+subplot(4,1,3);
+plot(tplot,trueX(:,3) - kfdx_p3(:,3)); 
+hold on; grid on;
+plot(tplot,trueX(:,3) - kfdx_p3(:,3) - stdev_p3(3,:)');
+plot(tplot,trueX(:,3) - kfdx_p3(:,3) + stdev_p3(3,:)');
+xlabel('Time (seconds)'); ylabel('Y [km]');
+
+subplot(4,1,4);
+plot(tplot,trueX(:,4) - kfdx_p3(:,4)); 
+hold on; grid on;
+plot(tplot,trueX(:,4) - kfdx_p3(:,4) - stdev_p3(4,:)');
+plot(tplot,trueX(:,4) - kfdx_p3(:,4) + stdev_p3(4,:)');
+xlabel('Time (seconds)'); ylabel('$\dot{Y} [km/s]$','Interpreter','latex');
+
+
+
+
+
+figure
+subplot(4,1,1);
+plot(tplot,kfdx_p3(:,1));
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('X [km]'); 
+title('LKF Estimated Error');
+
+subplot(4,1,2);
+plot(tplot,kfdx_p3(:,2)); 
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('$\dot{X} [km/s]$','Interpreter','latex');
+
+subplot(4,1,3);
+plot(tplot,kfdx_p3(:,3)); 
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('Y [km]');
+
+subplot(4,1,4);
+plot(tplot,kfdx_p3(:,4)); 
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('$\dot{Y} [km/s]$','Interpreter','latex');
+
+
+
+
+
+figure
+subplot(4,1,1);
+plot(tplot,stdev_p3(1,:));
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('X [km]'); 
+legend('Trajectory','-2\sigma','2\sigma');
+title('LKF Innovation with Provided Data');
+
+subplot(4,1,2);
+plot(tplot,stdev_p3(2,:));
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('$\dot{X} [km/s]$','Interpreter','latex');
+
+subplot(4,1,3);
+plot(tplot,stdev_p3(3,:));
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('Y [km]');
+
+subplot(4,1,4);
+plot(tplot,stdev_p3(4,:));
+hold on; grid on;
+xlabel('Time (seconds)'); ylabel('$\dot{Y} [km/s]$','Interpreter','latex');
