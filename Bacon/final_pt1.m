@@ -97,6 +97,17 @@ x_nom = @(t) [r0*cos(n0*t);...
              r0*sin(n0*t);...
              r0*n0*cos(n0*t)];
 
+% % Floquent analysis of A stability
+% dPhi_dt = @(t,x) reshape( A(x_nom(t))*reshape(x,4,4), 16,1);
+% [~,Phis] = ode45(dPhi_dt,[0,T0],reshape(eye(4),16,1),opts);
+% Phi = reshape(Phis(end,:)',4,4);
+% dPhi_dt = @(x) reshape( A(x(1:4))*reshape(x(5:20),4,4), 16,1);
+% dXdt = @(t,x)
+% [~,Phis] = ode45(dPhi_dt,[0,T0],reshape(eye(4),16,1),opts);
+% Phi = reshape(Phis(end,:)',4,4);
+
+%dXdt = @(t,x) [f(t,x(1:4)); dPhidt(t,x)];
+
 % simulate using DT jacobian
 Alin_CT = zeros(4,4,nt);
 Alin_DT = Alin_CT;
@@ -196,7 +207,7 @@ R = Rtrue;
 
 
 %% NEES/NIS tests
-num_runs = 20;
+num_runs = 100;
 regen_TMT_data = 0;
 alpha = 0.05;
 if regen_TMT_data
@@ -204,6 +215,7 @@ if regen_TMT_data
     xs = cell(1,num_runs);
     y = cell(1,num_runs);
     for j = 1:num_runs
+        j
         x0 = x_nom(0) + chol(P0,'lower')*randn(4,1)
         [xs{j},y{j}] = sim(x0,t,Gamma,Q,R,f,p,p_dot,phi,th);
     end
@@ -211,12 +223,14 @@ end
 
 % LKF
 Q_lkf = 1*Q;
-Q_lkf = [0.0071246231041958     0.001866095612661221e-2;
+Q_lkf = 0.01*[0.0071246231041958     0.001866095612661221e-2;
          0.001866095612661221e-2    0.00779388288435167];
+W(1,1) = 0.5*dt^2; W(3,2) = 05*dt^2; 
+Q_lkf= W*Qtrue*W';
 x0 = [0;0;0;0];
 %P0 = 50^2 * diag([1,1e-6,1,1e-6]);
 for j = 1:num_runs
-    [xs_lkf(:,:,j),Ps_lkf(:,:,:,j),s_lkf(:,:,j),invS,dy,~] = LKF(x0,P0,x_nom,h,A,H,W,Q_lkf,Rtrue,t,y{j});
+    [xs_lkf(:,:,j),Ps_lkf(:,:,:,j),s_lkf(:,:,j),invS,dy,~] = LKF(x0,P0,x_nom,h,A,H,Q_lkf,Rtrue,t,y{j});
     ex(j,:) = pagemtimes(pagemtimes(permute(xs{j}-xs_lkf(:,:,j),[3 1 2]),pageinv(Ps_lkf(:,:,:,j))),...
                          permute(xs{j}-xs_lkf(:,:,j),[1 3 2]));
     for k = 1:nt
@@ -233,23 +247,26 @@ title('LKF NEES'); axis([0 14000 0 2*r2(end)])
 xlabel('time (seconds)'); ylabel('NEES Statistic')
 
 py = sum(numel_y)/num_runs;
+py = numel_y(end,:);
 eyn = sum(ey.*~isnan(ey))./sum(~isnan(ey));
-r1 = chi2inv(alpha/2,num_runs*py)/num_runs;
-r2 = chi2inv(1-alpha/2,num_runs*py)/num_runs;
+r1 = chi2inv(alpha/2,num_runs*py)./sum(~isnan(ey));%num_runs;
+r2 = chi2inv(1-alpha/2,num_runs*py)./sum(~isnan(ey));%num_runs;
 figure(102);clf(); plot(t,eyn,'.');hold on; plot(t,r1,'--r'); plot(t,r2,'--r');
 title('LKF NIS'); axis([0 14000 0 2*r2(end)])
 xlabel('time (seconds)'); ylabel('NIS Statistic')
 
-%EKF
+%% EKF
 Q_ekf = 1*Q;
 x0 = x_nom(0);
+W(1,1) = 0.5*dt^2; W(3,2) = 05*dt^2; 
+Q_ekf = 1.4*W*Qtrue*W';
 %P0 = 50^2 * diag([1,1e-3,1,1e-3]);
 for j = 1:num_runs
-    [xs_ekf(:,:,j),Ps_ekf(:,:,:,j),s_ekf(:,:,j),invS,dy,inns_ekf] = EKF(x0,P0,f,h,A,H,W,Q_ekf,Rtrue,t,y{j});
+    [xs_ekf(:,:,j),Ps_ekf(:,:,:,j),s_ekf(:,:,j),invS,dy,inns_ekf] = EKF(x0,P0,f,h,A,H,Q_ekf,Rtrue,t,y{j});
     ex(j,:) = pagemtimes(pagemtimes(permute(xs{j}-xs_ekf(:,:,j),[3 1 2]),pageinv(Ps_ekf(:,:,:,j))),...
                          permute(xs{j}-xs_ekf(:,:,j),[1 3 2]));
     for k = 1:nt
-        numel_y(k) = length(dy{k});
+        numel_y(j,k) = length(dy{k});
         ey(j,k) = dy{k}'*invS{k}*dy{k};
     end
     
@@ -261,15 +278,20 @@ figure(103);clf(); plot(t,exn,'.'); yline(r1,'--r'); yline(r2,'--r');
 title('EKF NEES');axis([0 14000 0 2*r2(end)])
 xlabel('time (seconds)'); ylabel('NEES Statistic')
 
-eyn = sum(ey)./num_runs;
-r1 = chi2inv(alpha/2,num_runs*numel_y)/num_runs;
-r2 = chi2inv(1-alpha/2,num_runs*numel_y)/num_runs;
-figure(104);clf(); plot(t,exn,'.');hold on; plot(t,r1,'--r'); plot(t,r2,'--r');
+% eyn = sum(ey)./num_runs;
+% r1 = chi2inv(alpha/2,num_runs*numel_y(1,:))/num_runs;
+% r2 = chi2inv(1-alpha/2,num_runs*numel_y(1,:))/num_runs;
+py = sum(numel_y)./sum(~isnan(ey));
+%py = numel_y(end,:);
+eyn = sum(ey.*~isnan(ey))./sum(~isnan(ey));
+r1 = chi2inv(alpha/2,num_runs*py)./sum(~isnan(ey));%num_runs;
+r2 = chi2inv(1-alpha/2,num_runs*py)./sum(~isnan(ey));%num_runs;
+figure(104);clf(); plot(t,eyn,'.');hold on; plot(t,r1,'--r'); plot(t,r2,'--r');
 title('EKF NIS'); axis([0 14000 0 2*r2(end)])
 xlabel('time (seconds)'); ylabel('NIS Statistic')
 
 %% part 6
-[xs_ekf6,Ps_ekf6,s_ekf6,invS6,dy6,inns_ekf6] = EKF(x0,P0,f,h,A,H,W,Q_ekf,Rtrue,t,ydata);
+[xs_ekf6,Ps_ekf6,s_ekf6,invS6,dy6,inns_ekf6] = EKF(x0,P0,f,h,A,H,Q_ekf,Rtrue,t,ydata);
 
 %% functions
 
@@ -402,73 +424,73 @@ end
 % 
 % 
 
-function [xs,Ps,s,invSs,ey,inns] = EKF(x0,P0,f,h,A,H,W,Q,R,t,ydata)
-opts = odeset('RelTol',1e-12,'AbsTol',1e-12);
-ny = length(ydata);
-dt = t(2)-t(1);
-x = x0;
-P = P0;
-I = eye(length(x0));
-xs = zeros(4,ny); xs(:,1) = x;
-Ps = zeros(4,4,ny); Ps(:,:,1) = P;
-invSs = cell(1,ny);
-ey = cell(1,ny);
-s = zeros(4,ny); s(:,1) = 2*sqrt(diag(P));
-inns = zeros(3,ny);
-for k = 2:ny
-    % get F
-    Fk = I + dt*A(x);
-    
-    % prediction step
-    [~,x_] = ode45(f,[0 dt],x,opts);
-    x_ = x_(end,:)';
-    P_ = Fk*P*Fk' + W*Q*W';
-
-    % measurement processing
-    if ~isempty(ydata{k})
-        i_in_view = ydata{k}(4,:);
-        yk = reshape(ydata{k}(1:3,:),[],1);
-    else
-        i_in_view = [];
-        yk = [];
-    end
-    Hs = cell(1,length(i_in_view)); Rs = Hs;
-    yk_est = zeros(3*length(i_in_view),1);
-    for j = 1:length(i_in_view)
-        Hs{j} = H(t(k),x,i_in_view(j));
-        Rs{j} = R;
-        yk_est((j-1)*3+(1:3)) = h(t(k),x_,i_in_view(j));
-    end
-
-    % create augmented H and R matrices
-    Hk = vertcat(Hs{:});
-    Rk = blkdiag(Rs{:});
-
-    % correction step
-    if ~isempty(i_in_view)
-        invS = inv(Hk*P_*Hk' + Rk);
-        K = P_*Hk'/(Hk*P_*Hk' + Rk);
-        innovation = yk - yk_est;
-        innovation(3:3:end) = mod(pi + innovation(3:3:end), 2*pi) - pi;
-        x = x_ + K*innovation;
-        P = (I-K*Hk)*P_;
-        inns(:,k) = innovation(1:min(end,3));
-        
-    else
-        x = x_;
-        P = P_;
-        invS = inf;
-        innovation = inf;
-    end
-
-    % store current values
-    xs(:,k) = x;
-    Ps(:,:,k) = P;
-    s(:,k) = 2*sqrt(diag(P));
-    invSs{k} = invS;
-    ey{k} = innovation;
-end
-ey{1} = 0;
-invSs{1} = 0;
-end
-
+% function [xs,Ps,s,invSs,ey,inns] = EKF(x0,P0,f,h,A,H,W,Q,R,t,ydata)
+% opts = odeset('RelTol',1e-12,'AbsTol',1e-12);
+% ny = length(ydata);
+% dt = t(2)-t(1);
+% x = x0;
+% P = P0;
+% I = eye(length(x0));
+% xs = zeros(4,ny); xs(:,1) = x;
+% Ps = zeros(4,4,ny); Ps(:,:,1) = P;
+% invSs = cell(1,ny);
+% ey = cell(1,ny);
+% s = zeros(4,ny); s(:,1) = 2*sqrt(diag(P));
+% inns = zeros(3,ny);
+% for k = 2:ny
+%     % get F
+%     Fk = I + dt*A(x);
+%     
+%     % prediction step
+%     [~,x_] = ode45(f,[0 dt],x,opts);
+%     x_ = x_(end,:)';
+%     P_ = Fk*P*Fk' + W*Q*W';
+% 
+%     % measurement processing
+%     if ~isempty(ydata{k})
+%         i_in_view = ydata{k}(4,:);
+%         yk = reshape(ydata{k}(1:3,:),[],1);
+%     else
+%         i_in_view = [];
+%         yk = [];
+%     end
+%     Hs = cell(1,length(i_in_view)); Rs = Hs;
+%     yk_est = zeros(3*length(i_in_view),1);
+%     for j = 1:length(i_in_view)
+%         Hs{j} = H(t(k),x,i_in_view(j));
+%         Rs{j} = R;
+%         yk_est((j-1)*3+(1:3)) = h(t(k),x_,i_in_view(j));
+%     end
+% 
+%     % create augmented H and R matrices
+%     Hk = vertcat(Hs{:});
+%     Rk = blkdiag(Rs{:});
+% 
+%     % correction step
+%     if ~isempty(i_in_view)
+%         invS = inv(Hk*P_*Hk' + Rk);
+%         K = P_*Hk'/(Hk*P_*Hk' + Rk);
+%         innovation = yk - yk_est;
+%         innovation(3:3:end) = mod(pi + innovation(3:3:end), 2*pi) - pi;
+%         x = x_ + K*innovation;
+%         P = (I-K*Hk)*P_;
+%         inns(:,k) = innovation(1:min(end,3));
+%         
+%     else
+%         x = x_;
+%         P = P_;
+%         invS = inf;
+%         innovation = inf;
+%     end
+% 
+%     % store current values
+%     xs(:,k) = x;
+%     Ps(:,:,k) = P;
+%     s(:,k) = 2*sqrt(diag(P));
+%     invSs{k} = invS;
+%     ey{k} = innovation;
+% end
+% ey{1} = 0;
+% invSs{1} = 0;
+% end
+% 
